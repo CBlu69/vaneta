@@ -109,20 +109,22 @@
     row.dataset.backupBound = '1'; row.addEventListener('click', () => downloadBackup(true));
   }
 
-  function init() { bindExport(); addRestoreRow(); }
+  function loadScriptOnce(src, marker) {
+    if (document.querySelector(`script[data-${marker}]`)) return;
+    const script = document.createElement('script');
+    script.src = src; script.defer = true; script.dataset[marker] = '1';
+    document.head.appendChild(script);
+  }
+
+  function init() {
+    bindExport(); addRestoreRow();
+    loadScriptOnce('finance2.js', 'vantaFinance20');
+    loadScriptOnce('timeline.js', 'vantaTimeline');
+  }
+
   document.addEventListener('DOMContentLoaded', init); init();
   const observer = new MutationObserver(() => { bindExport(); addRestoreRow(); });
   observer.observe(document.body, { childList: true, subtree: true });
-
-  // Finance 2.0 is loaded from here so index.html needs no further wiring.
-  function loadFinance20() {
-    if (document.querySelector('script[data-vanta-finance20]')) return;
-    const script = document.createElement('script');
-    script.src = 'finance2.js'; script.defer = true; script.dataset.vantaFinance20 = '1';
-    document.head.appendChild(script);
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadFinance20);
-  else loadFinance20();
 
   window.VANTABackup = { export: downloadBackup, import: openFilePicker, makeBackup };
 })();
