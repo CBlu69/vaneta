@@ -67,6 +67,67 @@ function uid() {
 function todayKey(date = new Date()) {
   return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
 }
+function parseDateKey(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function dateToKey(date) {
+  return todayKey(date);
+}
+function getNextRepeatDate(due, repeat) {
+  const date = parseDateKey(due);
+
+  switch (repeat) {
+    case 'daily':
+      date.setDate(date.getDate() + 1);
+      break;
+
+    case 'weekly':
+      date.setDate(date.getDate() + 7);
+      break;
+
+    case 'monthly': {
+      const day = date.getDate();
+      date.setDate(1);
+      date.setMonth(date.getMonth() + 1);
+      const lastDay = new Date(
+        date.getFullYear(),
+        date.getMonth() + 1,
+        0
+      ).getDate();
+      date.setDate(Math.min(day, lastDay));
+      break;
+    }
+
+    case 'yearly': {
+      const month = date.getMonth();
+      const day = date.getDate();
+      date.setDate(1);
+      date.setFullYear(date.getFullYear() + 1);
+      date.setMonth(month);
+      const lastDay = new Date(
+        date.getFullYear(),
+        month + 1,
+        0
+      ).getDate();
+      date.setDate(Math.min(day, lastDay));
+      break;
+    }
+
+    default:
+      return null;
+  }
+
+  return dateToKey(date);
+}
+function repeatLabel(repeat) {
+  return {
+    daily: 'روزانه',
+    weekly: 'هفتگی',
+    monthly: 'ماهانه',
+    yearly: 'سالانه'
+  }[repeat] || '';
+}
 function fmtToman(n) {
   return Jalali.toPersianDigits(Math.round(n).toLocaleString('en-US'));
 }
@@ -328,7 +389,6 @@ function renderDashboard() {
     </div>
   `;
 
-  // wire events
   bento.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => switchView(el.getAttribute('data-nav'))));
   bento.querySelectorAll('[data-mood]').forEach(el => el.addEventListener('click', () => setMood(el.getAttribute('data-mood'))));
   document.getElementById('timerToggleBtn').addEventListener('click', toggleTimer);
@@ -432,6 +492,7 @@ function renderTasks() {
           <span class="badge priority-${t.priority}">${priorityLabel[t.priority] || t.priority}</span>
           ${t.category ? `<span class="meta-chip">${svg('tag', 12)}${escapeHtml(t.category)}</span>` : ''}
           ${t.due ? `<span class="meta-chip">${svg('calendar', 12)}${formatDueDate(t.due)}</span>` : ''}
+          ${t.repeat && t.repeat !== 'none' ? `<span class="meta-chip">${svg('refresh', 12)}${repeatLabel(t.repeat)}</span>` : ''}
         </div>
       </div>
       <div class="task-actions">
@@ -458,9 +519,45 @@ function formatDueDate(key) {
 function toggleTask(id) {
   const tasks = Store.get('tasks', []);
   const t = tasks.find(x => x.id === id);
-  if (t) t.done = !t.done;
+
+  if (!t) return;
+
+  const wasDone = t.done;
+  t.done = !t.done;
+
+  // وقتی کار تکرارشونده برای اولین بار انجام شد، نسخه بعدی آن ساخته می‌شود.
+  if (!wasDone && t.done && t.repeat && t.repeat !== 'none') {
+    const nextDue = getNextRepeatDate(t.due, t.repeat);
+
+    if (nextDue) {
+      const seriesId = t.seriesId || t.id;
+      const alreadyExists = tasks.some(
+        x => x.seriesId === seriesId && x.due === nextDue
+      );
+
+      if (!alreadyExists) {
+        tasks.push({
+          id: uid(),
+          text: t.text,
+          priority: t.priority,
+          category: t.category,
+          due: nextDue,
+          done: false,
+          repeat: t.repeat,
+          seriesId,
+          createdAt: Date.now()
+        });
+      }
+    }
+  }
+
   Store.set('tasks', tasks);
   renderTasks();
+  renderDashboard();
+
+  if (t.done && t.repeat && t.repeat !== 'none') {
+    toast(`کار بعدی ${repeatLabel(t.repeat)} برنامه‌ریزی شد`, 'success');
+  }
 }
 function deleteTask(id) {
   const tasks = Store.get('tasks', []).filter(t => t.id !== id);
@@ -485,6 +582,16 @@ function openTaskModal(id) {
       <div class="field"><label class="field-label">دسته‌بندی</label><input class="input" id="taskInputCategory" placeholder="کار، شخصی..." value="${editing ? escapeHtml(editing.category || '') : ''}"></div>
     </div>
     <div class="field"><label class="field-label">موعد انجام</label><input class="input" type="date" id="taskInputDue" value="${editing ? gregorianKeyToInput(editing.due) : gregorianKeyToInput(todayKey())}"></div>
+    <div class="field">
+      <label class="field-label">تکرار کار</label>
+      <select class="select" id="taskInputRepeat">
+        <option value="none" ${!editing?.repeat || editing.repeat === 'none' ? 'selected' : ''}>بدون تکرار</option>
+        <option value="daily" ${editing?.repeat === 'daily' ? 'selected' : ''}>روزانه</option>
+        <option value="weekly" ${editing?.repeat === 'weekly' ? 'selected' : ''}>هفتگی</option>
+        <option value="monthly" ${editing?.repeat === 'monthly' ? 'selected' : ''}>ماهانه</option>
+        <option value="yearly" ${editing?.repeat === 'yearly' ? 'selected' : ''}>سالانه</option>
+      </select>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost btn-block" id="taskCancelBtn">انصراف</button>
       <button class="btn btn-primary btn-block" id="taskSaveBtn">${editing ? 'ذخیره تغییرات' : 'افزودن کار'}</button>
@@ -499,12 +606,24 @@ function openTaskModal(id) {
         const priority = document.getElementById('taskInputPriority').value;
         const category = document.getElementById('taskInputCategory').value.trim();
         const due = document.getElementById('taskInputDue').value || todayKey();
+        const repeat = document.getElementById('taskInputRepeat').value || 'none';
         const allTasks = Store.get('tasks', []);
         if (editing) {
           const t = allTasks.find(x => x.id === id);
-          Object.assign(t, { text, priority, category, due });
+          Object.assign(t, { text, priority, category, due, repeat });
         } else {
-          allTasks.push({ id: uid(), text, priority, category, due, done: false, createdAt: Date.now() });
+          const newTaskId = uid();
+          allTasks.push({
+            id: newTaskId,
+            text,
+            priority,
+            category,
+            due,
+            done: false,
+            repeat,
+            seriesId: repeat !== 'none' ? newTaskId : null,
+            createdAt: Date.now()
+          });
         }
         Store.set('tasks', allTasks);
         closeModal();
@@ -738,7 +857,6 @@ function renderFinance() {
   document.getElementById('finExpense').textContent = fmtToman(expense);
   document.getElementById('finToday').textContent = fmtToman(todayExp);
 
-  // 7-day expense chart
   const days = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date(Date.now() - i * 86400000);
@@ -758,7 +876,6 @@ function renderFinance() {
     txList.innerHTML = emptyState('report', 'تراکنشی ثبت نشده', 'اولین تراکنش خودت را اضافه کن.');
     return;
   }
-  const catIcon = { 'درآمد': 'arrowDown', default: 'arrowUp' };
   txList.innerHTML = txs.slice(0, 12).map(t => `
     <div class="tx-row" data-id="${t.id}">
       <div class="tx-icon ${t.type}">${svg(t.type === 'income' ? 'arrowDown' : 'arrowUp', 16)}</div>
@@ -836,10 +953,9 @@ function renderCalendar() {
   const events = Store.get('events', []);
   const tasks = Store.get('tasks', []);
 
-  // first day of jalali month -> weekday
   const g0 = Jalali.jalaliToGregorian(State.calYear, State.calMonth, 1);
   const firstDate = new Date(g0.gy, g0.gm - 1, g0.gd);
-  const startWeekday = firstDate.getDay(); // 0=Sun
+  const startWeekday = firstDate.getDay();
   const monthLen = Jalali.jalaliMonthLength(State.calYear, State.calMonth);
 
   let cells = [];
@@ -1054,7 +1170,7 @@ function escapeHtml(str) {
    ========================================================= */
 const Lock = {
   pinBuffer: '',
-  mode: 'unlock', // unlock | setup | confirm | change-old | change-new | change-confirm
+  mode: 'unlock',
   tempPin: '',
   autolockTimer: null,
 };
@@ -1274,7 +1390,6 @@ function init() {
 }
 
 function shiftCalMonth(dir) {
-  // dir: 1 = next month (chronologically forward), UI arrow is mirrored due to RTL
   State.calMonth += dir;
   if (State.calMonth > 12) { State.calMonth = 1; State.calYear += 1; }
   if (State.calMonth < 1) { State.calMonth = 12; State.calYear -= 1; }
