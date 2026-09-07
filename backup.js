@@ -48,10 +48,7 @@
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
 
-      localStorage.setItem(META_KEY, JSON.stringify({
-        lastExportAt: Date.now()
-      }));
-
+      localStorage.setItem(META_KEY, JSON.stringify({ lastExportAt: Date.now() }));
       if (showToast && typeof window.toast === 'function') {
         window.toast('نسخه پشتیبان با موفقیت ساخته شد', 'success');
       }
@@ -72,13 +69,38 @@
     );
   }
 
-  function restoreBackup(payload) {
-    if (!isValidBackup(payload)) {
-      throw new Error('INVALID_BACKUP');
+  function createSafetyBackup() {
+    try {
+      const backup = makeBackup();
+      const json = JSON.stringify(backup, null, 2);
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `VANTA-safety-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.warn('VANTA safety backup failed:', err);
     }
+  }
 
-    // Safety backup before replacing anything.
-    downloadBackup(false);
+  function restoreBackup(payload) {
+    if (!isValidBackup(payload)) throw new Error('INVALID_BACKUP');
+
+    // Keep a local emergency copy before replacing the current state.
+    createSafetyBackup();
+
+    // True restore: remove every current VANTA key first so deleted records
+    // from the backup do not survive accidentally.
+    const currentKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(PREFIX)) currentKeys.push(key);
+    }
+    currentKeys.forEach(key => localStorage.removeItem(key));
 
     Object.keys(payload.data).forEach((key) => {
       if (!key || key.startsWith('__')) return;
@@ -106,11 +128,9 @@
         const text = await file.text();
         const payload = JSON.parse(text);
         restoreBackup(payload);
-
         if (typeof window.toast === 'function') {
           window.toast('اطلاعات بازیابی شد؛ VANTA دوباره بارگذاری می‌شود', 'success');
         }
-
         setTimeout(() => window.location.reload(), 900);
       } catch (err) {
         console.error('VANTA backup restore failed:', err);
@@ -126,9 +146,8 @@
   }
 
   function addRestoreRow() {
-    const settingsList = document.querySelector('.settings-list');
     const exportRow = document.getElementById('exportDataRow');
-    if (!settingsList || !exportRow || document.getElementById('importDataRow')) return;
+    if (!exportRow || document.getElementById('importDataRow')) return;
 
     const row = document.createElement('div');
     row.className = 'settings-row';
@@ -141,7 +160,6 @@
         <div class="settings-desc">انتخاب فایل Backup و برگرداندن اطلاعات</div>
       </div>
     `;
-
     row.addEventListener('click', openFilePicker);
     exportRow.insertAdjacentElement('afterend', row);
   }
@@ -158,9 +176,9 @@
     addRestoreRow();
   }
 
-  // app.js may render/re-render settings after startup, so retry briefly.
   document.addEventListener('DOMContentLoaded', init);
   init();
+
   const observer = new MutationObserver(() => {
     bindExport();
     addRestoreRow();
