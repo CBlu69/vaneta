@@ -1,130 +1,18 @@
-/* =========================================================
-   VANTA — Backup & Restore
-   Export/restore all VANTA localStorage data safely.
-   ========================================================= */
+/* VANTA — Backup/Restore + module loader */
 (function () {
   'use strict';
-
-  const PREFIX = 'vanta:';
-  const VERSION = 1;
-  const META_KEY = PREFIX + 'backupMeta';
-
-  function collectData() {
-    const data = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key || !key.startsWith(PREFIX)) continue;
-      try { data[key.slice(PREFIX.length)] = JSON.parse(localStorage.getItem(key)); }
-      catch (_) { data[key.slice(PREFIX.length)] = localStorage.getItem(key); }
-    }
-    return data;
-  }
-
-  function makeBackup() {
-    return { app: 'VANTA', type: 'local-backup', version: VERSION, createdAt: new Date().toISOString(), data: collectData() };
-  }
-
-  function downloadBackup(showToast = true) {
-    try {
-      const json = JSON.stringify(makeBackup(), null, 2);
-      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `VANTA-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      localStorage.setItem(META_KEY, JSON.stringify({ lastExportAt: Date.now() }));
-      if (showToast && typeof window.toast === 'function') window.toast('نسخه پشتیبان با موفقیت ساخته شد', 'success');
-    } catch (err) {
-      console.error('VANTA backup export failed:', err);
-      if (typeof window.toast === 'function') window.toast('ساخت Backup ناموفق بود', 'error');
-    }
-  }
-
-  function isValidBackup(payload) {
-    return !!(payload && payload.app === 'VANTA' && payload.type === 'local-backup' && payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data));
-  }
-
-  function createSafetyBackup() {
-    try {
-      const json = JSON.stringify(makeBackup(), null, 2);
-      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `VANTA-safety-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (err) { console.warn('VANTA safety backup failed:', err); }
-  }
-
-  function restoreBackup(payload) {
-    if (!isValidBackup(payload)) throw new Error('INVALID_BACKUP');
-    createSafetyBackup();
-    const currentKeys = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(PREFIX)) currentKeys.push(key);
-    }
-    currentKeys.forEach(key => localStorage.removeItem(key));
-    Object.keys(payload.data).forEach(key => {
-      if (!key || key.startsWith('__')) return;
-      localStorage.setItem(PREFIX + key, JSON.stringify(payload.data[key]));
-    });
-    localStorage.setItem(META_KEY, JSON.stringify({ lastRestoreAt: Date.now(), sourceCreatedAt: payload.createdAt || null }));
-  }
-
-  function openFilePicker() {
-    const input = document.createElement('input');
-    input.type = 'file'; input.accept = 'application/json,.json'; input.style.display = 'none';
-    input.addEventListener('change', async function () {
-      const file = input.files && input.files[0]; input.remove(); if (!file) return;
-      try {
-        restoreBackup(JSON.parse(await file.text()));
-        if (typeof window.toast === 'function') window.toast('اطلاعات بازیابی شد؛ VANTA دوباره بارگذاری می‌شود', 'success');
-        setTimeout(() => window.location.reload(), 900);
-      } catch (err) {
-        console.error('VANTA backup restore failed:', err);
-        const message = err.message === 'INVALID_BACKUP' ? 'این فایل Backup معتبر VANTA نیست' : 'بازیابی Backup انجام نشد؛ فایل را بررسی کن';
-        if (typeof window.toast === 'function') window.toast(message, 'error');
-      }
-    });
-    document.body.appendChild(input); input.click();
-  }
-
-  function addRestoreRow() {
-    const exportRow = document.getElementById('exportDataRow');
-    if (!exportRow || document.getElementById('importDataRow')) return;
-    const row = document.createElement('div');
-    row.className = 'settings-row'; row.id = 'importDataRow'; row.style.cursor = 'pointer';
-    row.innerHTML = `<div class="settings-icon">${typeof window.svg === 'function' ? window.svg('download', 16) : ''}</div><div class="settings-main"><div class="settings-label">بازیابی اطلاعات</div><div class="settings-desc">انتخاب فایل Backup و برگرداندن اطلاعات</div></div>`;
-    row.addEventListener('click', openFilePicker);
-    exportRow.insertAdjacentElement('afterend', row);
-  }
-
-  function bindExport() {
-    const row = document.getElementById('exportDataRow');
-    if (!row || row.dataset.backupBound === '1') return;
-    row.dataset.backupBound = '1'; row.addEventListener('click', () => downloadBackup(true));
-  }
-
-  function loadScriptOnce(src, marker) {
-    if (document.querySelector(`script[data-${marker}]`)) return;
-    const script = document.createElement('script');
-    script.src = src; script.defer = true; script.dataset[marker] = '1';
-    document.head.appendChild(script);
-  }
-
-  function init() {
-    bindExport(); addRestoreRow();
-    loadScriptOnce('finance2.js', 'vantaFinance20');
-    loadScriptOnce('timeline.js', 'vantaTimeline');
-  }
-
-  document.addEventListener('DOMContentLoaded', init); init();
-  const observer = new MutationObserver(() => { bindExport(); addRestoreRow(); });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  window.VANTABackup = { export: downloadBackup, import: openFilePicker, makeBackup };
+  const PREFIX='vanta:', VERSION=1, META_KEY=PREFIX+'backupMeta';
+  function collectData(){const data={};for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i);if(!key||!key.startsWith(PREFIX))continue;try{data[key.slice(PREFIX.length)]=JSON.parse(localStorage.getItem(key));}catch(_){data[key.slice(PREFIX.length)]=localStorage.getItem(key);}}return data;}
+  function makeBackup(){return{app:'VANTA',type:'local-backup',version:VERSION,createdAt:new Date().toISOString(),data:collectData()};}
+  function downloadBackup(showToast=true){try{const blob=new Blob([JSON.stringify(makeBackup(),null,2)],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`VANTA-backup-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);localStorage.setItem(META_KEY,JSON.stringify({lastExportAt:Date.now()}));if(showToast&&typeof window.toast==='function')window.toast('نسخه پشتیبان با موفقیت ساخته شد','success');}catch(err){console.error(err);if(typeof window.toast==='function')window.toast('ساخت Backup ناموفق بود','error');}}
+  function valid(p){return!!(p&&p.app==='VANTA'&&p.type==='local-backup'&&p.data&&typeof p.data==='object'&&!Array.isArray(p.data));}
+  function safety(){try{const blob=new Blob([JSON.stringify(makeBackup(),null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`VANTA-safety-backup-${Date.now()}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(_) {}}
+  function restore(p){if(!valid(p))throw Error('INVALID_BACKUP');safety();const keys=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(PREFIX))keys.push(k);}keys.forEach(k=>localStorage.removeItem(k));Object.keys(p.data).forEach(k=>{if(k&&!k.startsWith('__'))localStorage.setItem(PREFIX+k,JSON.stringify(p.data[k]));});localStorage.setItem(META_KEY,JSON.stringify({lastRestoreAt:Date.now(),sourceCreatedAt:p.createdAt||null}));}
+  function picker(){const input=document.createElement('input');input.type='file';input.accept='application/json,.json';input.style.display='none';input.onchange=async()=>{const file=input.files?.[0];input.remove();if(!file)return;try{restore(JSON.parse(await file.text()));if(window.toast)window.toast('اطلاعات بازیابی شد؛ VANTA دوباره بارگذاری می‌شود','success');setTimeout(()=>location.reload(),900);}catch(e){if(window.toast)window.toast(e.message==='INVALID_BACKUP'?'این فایل Backup معتبر VANTA نیست':'بازیابی Backup انجام نشد؛ فایل را بررسی کن','error');}};document.body.appendChild(input);input.click();}
+  function rows(){const e=document.getElementById('exportDataRow');if(e&&!document.getElementById('importDataRow')){const r=document.createElement('div');r.className='settings-row';r.id='importDataRow';r.style.cursor='pointer';r.innerHTML=`<div class="settings-icon"></div><div class="settings-main"><div class="settings-label">بازیابی اطلاعات</div><div class="settings-desc">انتخاب فایل Backup و برگرداندن اطلاعات</div></div>`;r.onclick=picker;e.insertAdjacentElement('afterend',r);}if(e&&!e.dataset.backupBound){e.dataset.backupBound='1';e.onclick=()=>downloadBackup(true);}}
+  function load(src,marker){if(document.querySelector(`script[data-${marker}]`))return;const s=document.createElement('script');s.src=src;s.defer=true;s.dataset[marker]='1';document.head.appendChild(s);}
+  function init(){rows();load('finance2.js','vantaFinance20');load('timeline.js','vantaTimeline');load('ai.js','vantaAI');}
+  document.addEventListener('DOMContentLoaded',init);init();
+  new MutationObserver(rows).observe(document.body,{childList:true,subtree:true});
+  window.VANTABackup={export:downloadBackup,import:picker,makeBackup};
 })();
